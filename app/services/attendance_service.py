@@ -1,5 +1,11 @@
 from datetime import datetime, time
+from zoneinfo import ZoneInfo
 from app import database
+
+def get_current_time_data():
+    """Returns exact current date and time in India Standard Time (IST)"""
+    now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+    return now_ist.strftime("%Y-%m-%d"), now_ist.strftime("%H:%M:%S")
 
 def get_company_settings():
     default_settings = {
@@ -12,25 +18,17 @@ def get_company_settings():
         "minimum_working_hours": 8.0,
         "half_day_hours": 4.0
     }
-    
     if database.company_settings_col is None:
         return default_settings
-
     settings = database.company_settings_col.find_one({"key": "default_rules"})
     if not settings:
         return default_settings
-    
-    # Merge with defaults to ensure all keys exist
     for k, v in default_settings.items():
         if k not in settings:
             settings[k] = v
-            
     return settings
 
 def determine_status_on_checkin(check_in_time_str: str, settings: dict) -> str:
-    """
-    Returns 'LATE' if check-in time is after late_after threshold, otherwise 'PRESENT'.
-    """
     try:
         c_time = datetime.strptime(check_in_time_str, "%H:%M:%S").time()
         late_parts = [int(p) for p in settings.get("late_after", "09:45").split(":")]
@@ -40,9 +38,6 @@ def determine_status_on_checkin(check_in_time_str: str, settings: dict) -> str:
         return "PRESENT"
 
 def calculate_working_hours(check_in_str: str, check_out_str: str) -> float:
-    """
-    Calculates the difference in hours between two time strings in %H:%M:%S format.
-    """
     try:
         fmt = "%H:%M:%S"
         diff = datetime.strptime(check_out_str, fmt) - datetime.strptime(check_in_str, fmt)

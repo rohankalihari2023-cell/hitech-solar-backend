@@ -10,7 +10,8 @@ from app.services.geofence_service import verify_geofence
 from app.services.attendance_service import (
     get_company_settings,
     determine_status_on_checkin,
-    calculate_working_hours
+    calculate_working_hours,
+    get_current_time_data
 )
 from app.utils.validators import allowed_file
 
@@ -24,10 +25,9 @@ def get_uploaded_image(filename):
 @jwt_required
 def check_in():
     user = g.current_user
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    current_time_str = datetime.now().strftime("%H:%M:%S")
+    today_str, current_time_str = get_current_time_data()
 
-    # Anti-Proxy Rule 1: One check-in per day
+    # Anti-Proxy: One check-in per day
     existing = database.attendance_col.find_one({"employee_id": user["employee_id"], "date": today_str})
     if existing and existing.get("check_in_time"):
         return jsonify({"success": False, "message": "Attendance already marked for today."}), 400
@@ -37,7 +37,7 @@ def check_in():
     device_info = request.form.get("device_info", "Android Device")
 
     if not lat or not lon:
-        return jsonify({"success": False, "message": "GPS coordinates (latitude and longitude) are required."}), 400
+        return jsonify({"success": False, "message": "GPS coordinates are required."}), 400
 
     try:
         f_lat = float(lat)
@@ -45,17 +45,22 @@ def check_in():
     except (ValueError, TypeError):
         return jsonify({"success": False, "message": "Invalid GPS coordinates format."}), 400
 
-    # Server-Side Geofence Validation
+    # Fetch user to check if Field Worker
+    user_doc = database.users_col.find_one({"employee_id": user["employee_id"]})
+    is_field_worker = user_doc.get("is_field_worker", False) if user_doc else False
+
     settings = get_company_settings()
     office_lat = float(settings.get("office_latitude", 28.6139))
     office_lon = float(settings.get("office_longitude", 77.2090))
     office_radius = float(settings.get("office_radius", 150.0))
 
     is_inside, distance = verify_geofence(f_lat, f_lon, office_lat, office_lon, office_radius)
-    if not is_inside:
+
+    # If NOT a field worker, enforce strict office geofence
+    if not is_field_worker and not is_inside:
         return jsonify({
             "success": False,
-            "message": f"You are outside the office attendance area. Distance: {distance}m (Allowed: {office_radius}m)."
+            "message": f"Outside office area. Distance: {distance}m (Allowed: {office_radius}m)."
         }), 403
 
     # Attendance Selfie Verification
@@ -90,6 +95,8 @@ def check_in():
         "check_out_photo": None,
         "status": status,
         "late_status": late_status,
+        "is_field_worker": is_field_worker,
+        "distance_meters": distance,
         "device_info": device_info,
         "created_at": datetime.now(timezone.utc),
         "updated_at": datetime.now(timezone.utc)
@@ -101,9 +108,10 @@ def check_in():
         upsert=True
     )
 
+    mode_label = "Field Worker" if is_field_worker else "Office"
     return jsonify({
         "success": True,
-        "message": f"Check-in successful! Recorded status: {status}",
+        "message": f"Check-in successful ({mode_label})! Time: {current_time_str}",
         "attendance": record
     }), 201
 
@@ -111,17 +119,14 @@ def check_in():
 @jwt_required
 def check_out():
     user = g.current_user
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    current_time_str = datetime.now().strftime("%H:%M:%S")
+    today_str, current_time_str = get_current_time_data()
 
-    # Anti-Proxy: Check-out only after check-in
     existing = database.attendance_col.find_one({"employee_id": user["employee_id"], "date": today_str})
     if not existing or not existing.get("check_in_time"):
         return jsonify({"success": False, "message": "Cannot check-out without checking in first."}), 400
 
-    # Anti-Proxy: Prevent duplicate check-outs
     if existing.get("check_out_time"):
-        return jsonify({"success": False, "message": "You have already completed check-out for today."}), 400
+        return jsonify({"success": False, "message": "Check-out already completed for today."}), 400
 
     lat = request.form.get("latitude")
     lon = request.form.get("longitude")
@@ -134,16 +139,19 @@ def check_out():
     except (ValueError, TypeError):
         return jsonify({"success": False, "message": "Invalid GPS coordinates format."}), 400
 
+    user_doc = database.users_col.find_one({"employee_id": user["employee_id"]})
+    is_field_worker = user_doc.get("is_field_worker", False) if user_doc else False
+
     settings = get_company_settings()
     office_lat = float(settings.get("office_latitude", 28.6139))
     office_lon = float(settings.get("office_longitude", 77.2090))
     office_radius = float(settings.get("office_radius", 150.0))
 
     is_inside, distance = verify_geofence(f_lat, f_lon, office_lat, office_lon, office_radius)
-    if not is_inside:
+    if not is_field_worker and not is_inside:
         return jsonify({
             "success": False,
-            "message": f"You are outside the office attendance area. Distance: {distance}m"
+            "message": f"Outside office area for check-out. Distance: {distance}m"
         }), 403
 
     photo_url = None
@@ -157,8 +165,6 @@ def check_out():
             photo_url = f"/api/attendance/uploads/{filename}"
 
     hours = calculate_working_hours(existing["check_in_time"], current_time_str)
-    
-    # Calculate Half-day threshold
     status = existing.get("status", "PRESENT")
     half_day_limit = float(settings.get("half_day_hours", 4.0))
     if hours < half_day_limit:
@@ -180,7 +186,7 @@ def check_out():
 
     return jsonify({
         "success": True,
-        "message": "Check-out completed successfully.",
+        "message": f"Check-out completed! Hours: {hours} hrs",
         "attendance": existing
     }), 200
 
@@ -188,7 +194,7 @@ def check_out():
 @jwt_required
 def get_today_attendance():
     user = g.current_user
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str, _ = get_current_time_data()
     record = database.attendance_col.find_one({"employee_id": user["employee_id"], "date": today_str})
     if record:
         record["id"] = str(record.pop("_id"))
@@ -200,16 +206,13 @@ def get_attendance_history():
     user = g.current_user
     emp_id = request.args.get("employee_id")
     target_id = emp_id.upper() if (user["role"] == "ADMIN" and emp_id) else user["employee_id"]
-
-    month = request.args.get("month") # YYYY-MM format
+    month = request.args.get("month")
     query = {"employee_id": target_id}
     if month:
         query["date"] = {"$regex": f"^{month}"}
-
     records = list(database.attendance_col.find(query).sort("date", -1).limit(60))
     for r in records:
         r["id"] = str(r.pop("_id"))
-
     return jsonify({"success": True, "records": records}), 200
 
 @attendance_bp.route("/report", methods=["GET"])
@@ -219,7 +222,6 @@ def get_attendance_report_json():
     end_date = request.args.get("end_date")
     emp_id = request.args.get("employee_id")
     status = request.args.get("status")
-
     query = {}
     if emp_id:
         query["employee_id"] = emp_id.upper()
@@ -227,9 +229,7 @@ def get_attendance_report_json():
         query["date"] = {"$gte": start_date, "$lte": end_date}
     if status:
         query["status"] = status.upper()
-
     records = list(database.attendance_col.find(query).sort("date", -1))
     for r in records:
         r["id"] = str(r.pop("_id"))
-
     return jsonify({"success": True, "records": records}), 200

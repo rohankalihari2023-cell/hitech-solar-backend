@@ -60,7 +60,7 @@ def create_employee():
         "password_hash": hashed_pw,
         "role": role,
         "department": department,
-        "phone": phone,
+        "phone": phone,`n        "is_field_worker": data.get("is_field_worker", False),
         "is_active": True,
         "created_at": datetime.now(timezone.utc)
     }
@@ -90,7 +90,7 @@ def update_employee(emp_id):
     data = request.get_json() or {}
     update_fields = {}
     
-    for f in ["name", "department", "phone", "role", "is_active"]:
+    for f in ["name", "department", "phone", "role", "is_active", "is_field_worker"]:
         if f in data:
             update_fields[f] = data[f]
 
@@ -130,3 +130,4 @@ def reset_password(emp_id):
         return jsonify({"success": False, "message": "Employee not found."}), 404
 
     return jsonify({"success": True, "message": f"Password reset successfully to '{new_password}'."}), 200
+
