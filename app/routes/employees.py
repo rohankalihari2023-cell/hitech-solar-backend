@@ -60,7 +60,8 @@ def create_employee():
         "password_hash": hashed_pw,
         "role": role,
         "department": department,
-        "phone": phone,`n        "is_field_worker": data.get("is_field_worker", False),
+        "phone": phone,
+        "is_field_worker": data.get("is_field_worker", False),
         "is_active": True,
         "created_at": datetime.now(timezone.utc)
     }
@@ -88,21 +89,53 @@ def get_employee(emp_id):
 @admin_required
 def update_employee(emp_id):
     data = request.get_json() or {}
+    query = {"_id": ObjectId(emp_id)} if ObjectId.is_valid(emp_id) else {"employee_id": emp_id.upper()}
+    current_user = database.users_col.find_one(query)
+    if not current_user:
+        return jsonify({"success": False, "message": "Employee not found."}), 404
+
+    old_emp_id = current_user.get("employee_id")
     update_fields = {}
-    
-    for f in ["name", "department", "phone", "role", "is_active", "is_field_worker"]:
+
+    # 1. Update Name
+    if "name" in data and str(data["name"]).strip():
+        new_name = str(data["name"]).strip()
+        update_fields["name"] = new_name
+        if database.attendance_col is not None:
+            database.attendance_col.update_many({"employee_id": old_emp_id}, {"$set": {"employee_name": new_name}})
+
+    # 2. Update Department, phone, role, is_active, is_field_worker
+    for f in ["department", "phone", "role", "is_active", "is_field_worker"]:
         if f in data:
             update_fields[f] = data[f]
 
     if "role" in update_fields and update_fields["role"] not in ["ADMIN", "EMPLOYEE"]:
         return jsonify({"success": False, "message": "Role must be ADMIN or EMPLOYEE."}), 400
 
-    query = {"_id": ObjectId(emp_id)} if ObjectId.is_valid(emp_id) else {"employee_id": emp_id.upper()}
-    res = database.users_col.update_one(query, {"$set": update_fields})
-    if res.matched_count == 0:
-        return jsonify({"success": False, "message": "Employee not found."}), 404
+    # 3. Update / Reset Password
+    if "password" in data and data["password"] and len(str(data["password"]).strip()) > 0:
+        new_pw = str(data["password"]).strip()
+        if len(new_pw) < 6:
+            return jsonify({"success": False, "message": "Password must be at least 6 characters."}), 400
+        update_fields["password_hash"] = bcrypt.hashpw(new_pw.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
-    return jsonify({"success": True, "message": "Employee updated successfully."}), 200
+    # 4. Update Employee ID (with uniqueness check & cascading)
+    new_emp_id = (data.get("new_employee_id") or data.get("employee_id") or "").strip().upper()
+    if new_emp_id and new_emp_id != old_emp_id:
+        existing = database.users_col.find_one({"employee_id": new_emp_id})
+        if existing:
+            return jsonify({"success": False, "message": f"Employee ID '{new_emp_id}' is already in use."}), 409
+        update_fields["employee_id"] = new_emp_id
+        if database.attendance_col is not None:
+            database.attendance_col.update_many({"employee_id": old_emp_id}, {"$set": {"employee_id": new_emp_id}})
+        if database.leave_requests_col is not None:
+            database.leave_requests_col.update_many({"employee_id": old_emp_id}, {"$set": {"employee_id": new_emp_id}})
+
+    if not update_fields:
+        return jsonify({"success": False, "message": "No fields provided to update."}), 400
+
+    database.users_col.update_one({"_id": current_user["_id"]}, {"$set": update_fields})
+    return jsonify({"success": True, "message": "Employee updated successfully.", "updated_fields": list(update_fields.keys())}), 200
 
 @employees_bp.route("/<emp_id>", methods=["DELETE"])
 @admin_required
