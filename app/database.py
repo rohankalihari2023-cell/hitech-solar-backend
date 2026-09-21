@@ -1,4 +1,6 @@
 import logging
+from datetime import datetime, timezone
+import bcrypt
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from app.config import Config
 
@@ -113,6 +115,7 @@ def init_db(app=None):
 
         _apply_collection_validators()
         _create_indexes()
+        _ensure_default_admin()
         logger.info(f"MongoDB connected successfully to database: {db.name}")
         return db
     except Exception as e:
@@ -144,3 +147,28 @@ def _create_indexes():
         company_settings_col.create_index("key", unique=True)
     except Exception as err:
         logger.warning(f"Index creation notice: {err}")
+
+
+def _ensure_default_admin():
+    """Create the initial administrator once, only for an otherwise empty database."""
+    if users_col.count_documents({}) != 0:
+        return
+
+    admin = {
+        "name": "Administrator",
+        "email": "admin@hitechsolar.com",
+        "employee_id": "ADMIN01",
+        "password_hash": bcrypt.hashpw(b"Admin@123", bcrypt.gensalt()).decode("utf-8"),
+        "role": "ADMIN",
+        "department": "Administration",
+        "phone": "",
+        "is_field_worker": False,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc),
+    }
+    users_col.update_one(
+        {"employee_id": admin["employee_id"]},
+        {"$setOnInsert": admin},
+        upsert=True,
+    )
+    logger.warning("Created initial administrator account with employee ID ADMIN01.")
