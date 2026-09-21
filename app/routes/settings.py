@@ -17,7 +17,21 @@ def fetch_settings():
 @admin_required
 def update_settings():
     data = request.get_json() or {}
-    update_data = {}
+    # Store the complete document on first save so it satisfies the collection schema.
+    update_data = {
+        "key": "default_rules",
+        "office_latitude": 28.6139,
+        "office_longitude": 77.2090,
+        "office_radius": 150.0,
+        "office_start_time": "09:30",
+        "office_end_time": "18:30",
+        "late_after": "09:45",
+        "minimum_working_hours": 8.0,
+        "half_day_hours": 4.0,
+    }
+    existing = database.company_settings_col.find_one({"key": "default_rules"})
+    if existing:
+        update_data.update({key: existing[key] for key in update_data if key in existing})
 
     numeric_keys = ["office_latitude", "office_longitude", "office_radius", "minimum_working_hours", "half_day_hours"]
     string_keys = ["office_start_time", "office_end_time", "late_after"]

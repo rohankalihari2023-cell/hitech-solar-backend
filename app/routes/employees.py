@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from bson import ObjectId
 import bcrypt
 from datetime import datetime, timezone
@@ -8,9 +8,19 @@ from app.utils.validators import is_valid_email
 
 employees_bp = Blueprint("employees", __name__)
 
+
+def _database_unavailable_response():
+    """Return a useful response instead of an AttributeError when MongoDB is down."""
+    return jsonify({
+        "success": False,
+        "message": "Database is unavailable. Check the MongoDB connection and try again."
+    }), 503
+
 @employees_bp.route("", methods=["GET"])
 @admin_required
 def list_employees():
+    if database.users_col is None:
+        return _database_unavailable_response()
     query = {}
     search = request.args.get("search", "").strip()
     if search:
@@ -29,6 +39,8 @@ def list_employees():
 @employees_bp.route("", methods=["POST"])
 @admin_required
 def create_employee():
+    if database.users_col is None:
+        return _database_unavailable_response()
     data = request.get_json() or {}
     name = data.get("name", "").strip()
     email = data.get("email", "").strip().lower()
@@ -66,7 +78,13 @@ def create_employee():
         "created_at": datetime.now(timezone.utc)
     }
     
-    result = database.users_col.insert_one(doc)
+    try:
+        result = database.users_col.insert_one(doc)
+    except Exception as exc:
+        # The unique index is the final authority when two requests arrive together.
+        if getattr(exc, "code", None) == 11000:
+            return jsonify({"success": False, "message": "Employee with this email or ID already exists."}), 409
+        raise
     doc["id"] = str(result.inserted_id)
     del doc["password_hash"]
     del doc["_id"]
@@ -76,6 +94,8 @@ def create_employee():
 @employees_bp.route("/<emp_id>", methods=["GET"])
 @admin_required
 def get_employee(emp_id):
+    if database.users_col is None:
+        return _database_unavailable_response()
     query = {"_id": ObjectId(emp_id)} if ObjectId.is_valid(emp_id) else {"employee_id": emp_id.upper()}
     user = database.users_col.find_one(query, {"password_hash": 0})
 
@@ -88,6 +108,8 @@ def get_employee(emp_id):
 @employees_bp.route("/<emp_id>", methods=["PUT"])
 @admin_required
 def update_employee(emp_id):
+    if database.users_col is None:
+        return _database_unavailable_response()
     data = request.get_json() or {}
     query = {"_id": ObjectId(emp_id)} if ObjectId.is_valid(emp_id) else {"employee_id": emp_id.upper()}
     current_user = database.users_col.find_one(query)
@@ -139,17 +161,37 @@ def update_employee(emp_id):
 
 @employees_bp.route("/<emp_id>", methods=["DELETE"])
 @admin_required
-def disable_employee(emp_id):
+def delete_employee(emp_id):
+    if database.users_col is None:
+        return _database_unavailable_response()
+
     query = {"_id": ObjectId(emp_id)} if ObjectId.is_valid(emp_id) else {"employee_id": emp_id.upper()}
-    res = database.users_col.update_one(query, {"$set": {"is_active": False}})
-    if res.matched_count == 0:
+    employee = database.users_col.find_one(query, {"employee_id": 1, "role": 1})
+    if not employee:
         return jsonify({"success": False, "message": "Employee not found."}), 404
 
-    return jsonify({"success": True, "message": "Employee disabled successfully."}), 200
+    if str(employee["_id"]) == g.current_user["user_id"]:
+        return jsonify({"success": False, "message": "You cannot delete your own administrator account."}), 400
+
+    # Never permit the last administrator account to be deleted.
+    if employee.get("role") == "ADMIN" and database.users_col.count_documents({"role": "ADMIN", "is_active": True}) <= 1:
+        return jsonify({"success": False, "message": "At least one active administrator account must remain."}), 400
+
+    employee_id = employee["employee_id"]
+    database.users_col.delete_one({"_id": employee["_id"]})
+    # These records only belong to this employee, so removing them keeps the database consistent.
+    if database.attendance_col is not None:
+        database.attendance_col.delete_many({"employee_id": employee_id})
+    if database.leave_requests_col is not None:
+        database.leave_requests_col.delete_many({"employee_id": employee_id})
+
+    return jsonify({"success": True, "message": "Employee and associated records deleted successfully."}), 200
 
 @employees_bp.route("/<emp_id>/reset-password", methods=["POST"])
 @admin_required
 def reset_password(emp_id):
+    if database.users_col is None:
+        return _database_unavailable_response()
     data = request.get_json() or {}
     new_password = data.get("password", "Welcome@123")
     if len(new_password) < 6:
