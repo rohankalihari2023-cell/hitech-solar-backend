@@ -36,6 +36,7 @@ COLLECTION_VALIDATORS = {
                 "is_field_worker": {"bsonType": "bool"},
                 "is_active": {"bsonType": "bool"},
                 "created_at": {"bsonType": "date"},
+                "bootstrap_admin_reset_at": {"bsonType": "date"},
                 "profile_photo": {"bsonType": ["string", "null"]},
             },
         }
@@ -150,8 +151,9 @@ def _create_indexes():
 
 
 def _ensure_default_admin():
-    """Ensure the requested initial administrator exists without altering existing accounts."""
-    if users_col.find_one({"employee_id": "ADMIN01"}):
+    """Create or perform the explicitly requested one-time reset of ADMIN01."""
+    existing_admin = users_col.find_one({"employee_id": "ADMIN01"})
+    if existing_admin and existing_admin.get("bootstrap_admin_reset_at"):
         return
 
     admin = {
@@ -166,9 +168,18 @@ def _ensure_default_admin():
         "is_active": True,
         "created_at": datetime.now(timezone.utc),
     }
-    users_col.update_one(
-        {"employee_id": admin["employee_id"]},
-        {"$setOnInsert": admin},
-        upsert=True,
-    )
-    logger.warning("Created administrator account with employee ID ADMIN01.")
+    if existing_admin:
+        users_col.update_one(
+            {"_id": existing_admin["_id"]},
+            {"$set": {
+                "password_hash": admin["password_hash"],
+                "role": "ADMIN",
+                "is_active": True,
+                "bootstrap_admin_reset_at": datetime.now(timezone.utc),
+            }},
+        )
+        logger.warning("Reset and enabled administrator account ADMIN01.")
+    else:
+        admin["bootstrap_admin_reset_at"] = datetime.now(timezone.utc)
+        users_col.insert_one(admin)
+        logger.warning("Created administrator account with employee ID ADMIN01.")
