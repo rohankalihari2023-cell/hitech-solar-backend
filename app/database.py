@@ -150,8 +150,8 @@ def _create_indexes():
 
 
 def _ensure_default_admin():
-    """Create the initial administrator once, only for an otherwise empty database."""
-    if users_col.count_documents({}) != 0:
+    """Ensure the requested initial administrator exists without altering existing accounts."""
+    if users_col.find_one({"employee_id": "ADMIN01"}):
         return
 
     admin = {
@@ -171,4 +171,4 @@ def _ensure_default_admin():
         {"$setOnInsert": admin},
         upsert=True,
     )
-    logger.warning("Created initial administrator account with employee ID ADMIN01.")
+    logger.warning("Created administrator account with employee ID ADMIN01.")
