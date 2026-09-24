@@ -28,7 +28,21 @@ def get_company_settings():
             settings[k] = v
     return settings
 
-def determine_status_on_checkin(check_in_time_str: str, settings: dict) -> str:
+def is_sunday(date_str: str = None) -> bool:
+    """Returns True if the specified date (or current IST date) is a Sunday."""
+    try:
+        if date_str:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+        else:
+            dt = datetime.now(ZoneInfo("Asia/Kolkata"))
+        return dt.weekday() == 6
+    except Exception:
+        return False
+
+def determine_status_on_checkin(check_in_time_str: str, settings: dict, date_str: str = None) -> str:
+    # Sunday is a weekly holiday - check-in on Sunday is never marked LATE
+    if date_str and is_sunday(date_str):
+        return "PRESENT"
     try:
         c_time = datetime.strptime(check_in_time_str, "%H:%M:%S").time()
         late_parts = [int(p) for p in settings.get("late_after", "09:45").split(":")]

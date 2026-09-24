@@ -1,14 +1,15 @@
-from datetime import datetime
 from flask import Blueprint, jsonify
 from app import database
 from app.middleware.auth import admin_required
+from app.services.attendance_service import get_current_time_data, is_sunday
 
 dashboard_bp = Blueprint("dashboard", __name__)
 
 @dashboard_bp.route("/stats", methods=["GET"])
 @admin_required
 def get_dashboard_stats():
-    today = datetime.now().strftime("%Y-%m-%d")
+    today, current_time = get_current_time_data()
+    today_is_sunday = is_sunday(today)
     
     total_employees = 0
     today_records = []
@@ -30,7 +31,12 @@ def get_dashboard_stats():
     present_today = len(today_records)
     late_today = sum(1 for r in today_records if r.get("status") == "LATE" or r.get("late_status") == "LATE")
     currently_working = sum(1 for r in today_records if r.get("check_in_time") and not r.get("check_out_time"))
-    absent_today = max(0, total_employees - present_today - on_leave_today)
+    
+    # On Sunday (Weekly Holiday), absent count is 0 because regular staff are not expected
+    if today_is_sunday:
+        absent_today = 0
+    else:
+        absent_today = max(0, total_employees - present_today - on_leave_today)
 
     for r in today_records:
         r["id"] = str(r.pop("_id"))
@@ -43,7 +49,10 @@ def get_dashboard_stats():
             "absent_today": absent_today,
             "late_today": late_today,
             "currently_working": currently_working,
-            "on_leave_today": on_leave_today
+            "on_leave_today": on_leave_today,
+            "is_sunday": today_is_sunday,
+            "is_holiday": today_is_sunday,
+            "holiday_name": "Sunday (Weekly Off)" if today_is_sunday else None
         },
         "today_attendance": today_records
     }), 200

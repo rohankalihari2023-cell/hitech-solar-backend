@@ -11,7 +11,8 @@ from app.services.attendance_service import (
     get_company_settings,
     determine_status_on_checkin,
     calculate_working_hours,
-    get_current_time_data
+    get_current_time_data,
+    is_sunday
 )
 from app.utils.validators import allowed_file
 
@@ -26,6 +27,17 @@ def get_uploaded_image(filename):
 def check_in():
     user = g.current_user
     today_str, current_time_str = get_current_time_data()
+
+    # Sunday Weekly Holiday check
+    if is_sunday(today_str):
+        allow_holiday = request.form.get("allow_holiday_work", "false").lower() == "true"
+        if not allow_holiday:
+            return jsonify({
+                "success": False,
+                "is_holiday": True,
+                "is_sunday": True,
+                "message": "Today is Sunday (Weekly Holiday). Attendance is not required."
+            }), 400
 
     # Anti-Proxy: One check-in per day
     existing = database.attendance_col.find_one({"employee_id": user["employee_id"], "date": today_str})
@@ -77,7 +89,7 @@ def check_in():
     saved_path = os.path.join(Config.UPLOAD_FOLDER, secure_filename(filename))
     file.save(saved_path)
 
-    status = determine_status_on_checkin(current_time_str, settings)
+    status = determine_status_on_checkin(current_time_str, settings, today_str)
     late_status = "LATE" if status == "LATE" else "NO"
 
     record = {
@@ -194,11 +206,20 @@ def check_out():
 @jwt_required
 def get_today_attendance():
     user = g.current_user
-    today_str, _ = get_current_time_data()
+    today_str, current_time_str = get_current_time_data()
+    is_sun = is_sunday(today_str)
     record = database.attendance_col.find_one({"employee_id": user["employee_id"], "date": today_str})
     if record:
         record["id"] = str(record.pop("_id"))
-    return jsonify({"success": True, "attendance": record}), 200
+    return jsonify({
+        "success": True,
+        "attendance": record,
+        "is_sunday": is_sun,
+        "is_holiday": is_sun,
+        "holiday_name": "Sunday (Weekly Off)" if is_sun else None,
+        "date": today_str,
+        "current_time": current_time_str
+    }), 200
 
 @attendance_bp.route("/history", methods=["GET"])
 @jwt_required
