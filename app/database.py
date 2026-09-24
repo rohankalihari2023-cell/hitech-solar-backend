@@ -146,6 +146,8 @@ def _create_indexes():
         leave_requests_col.create_index([("employee_id", ASCENDING), ("created_at", DESCENDING)])
         leave_requests_col.create_index("status")
         company_settings_col.create_index("key", unique=True)
+        if holidays_col is not None:
+            holidays_col.create_index("date", unique=True)
     except Exception as err:
         logger.warning(f"Index creation notice: {err}")
 

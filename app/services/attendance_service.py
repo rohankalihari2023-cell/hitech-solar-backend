@@ -39,9 +39,33 @@ def is_sunday(date_str: str = None) -> bool:
     except Exception:
         return False
 
+def get_holiday_info(date_str: str = None):
+    """
+    Checks if a date is a Sunday OR an admin-reserved holiday.
+    Returns (is_holiday: bool, holiday_name: str, holiday_reason: str).
+    """
+    if not date_str:
+        date_str, _ = get_current_time_data()
+
+    if is_sunday(date_str):
+        return True, "Sunday (Weekly Off)", "Weekly off for all employees"
+
+    if database.holidays_col is not None:
+        try:
+            h = database.holidays_col.find_one({"date": date_str})
+            if h:
+                name = h.get("name", "Holiday")
+                reason = h.get("reason", name)
+                return True, name, reason
+        except Exception:
+            pass
+
+    return False, None, None
+
 def determine_status_on_checkin(check_in_time_str: str, settings: dict, date_str: str = None) -> str:
-    # Sunday is a weekly holiday - check-in on Sunday is never marked LATE
-    if date_str and is_sunday(date_str):
+    # Holidays & Sundays: check-in is never marked LATE
+    is_hol, _, _ = get_holiday_info(date_str)
+    if is_hol:
         return "PRESENT"
     try:
         c_time = datetime.strptime(check_in_time_str, "%H:%M:%S").time()

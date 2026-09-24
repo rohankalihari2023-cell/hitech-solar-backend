@@ -21,6 +21,7 @@ def create_app():
     from app.routes.reports import reports_bp
     from app.routes.settings import settings_bp
     from app.routes.dashboard import dashboard_bp
+    from app.routes.holidays import holidays_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(employees_bp, url_prefix="/api/employees")
@@ -29,6 +30,7 @@ def create_app():
     app.register_blueprint(reports_bp, url_prefix="/api/reports")
     app.register_blueprint(settings_bp, url_prefix="/api/settings")
     app.register_blueprint(dashboard_bp, url_prefix="/api/dashboard")
+    app.register_blueprint(holidays_bp, url_prefix="/api/holidays")
 
     @app.route("/", methods=["GET"])
     def index():

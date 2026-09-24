@@ -12,7 +12,8 @@ from app.services.attendance_service import (
     determine_status_on_checkin,
     calculate_working_hours,
     get_current_time_data,
-    is_sunday
+    is_sunday,
+    get_holiday_info
 )
 from app.utils.validators import allowed_file
 
@@ -28,15 +29,17 @@ def check_in():
     user = g.current_user
     today_str, current_time_str = get_current_time_data()
 
-    # Sunday Weekly Holiday check
-    if is_sunday(today_str):
+    # Holiday check (Sunday or Admin-reserved Holiday)
+    is_hol, hol_name, hol_reason = get_holiday_info(today_str)
+    if is_hol:
         allow_holiday = request.form.get("allow_holiday_work", "false").lower() == "true"
         if not allow_holiday:
             return jsonify({
                 "success": False,
                 "is_holiday": True,
-                "is_sunday": True,
-                "message": "Today is Sunday (Weekly Holiday). Attendance is not required."
+                "holiday_name": hol_name,
+                "holiday_reason": hol_reason,
+                "message": f"Today is a Holiday ({hol_name}: {hol_reason}). Attendance is not required."
             }), 400
 
     # Anti-Proxy: One check-in per day
@@ -207,16 +210,17 @@ def check_out():
 def get_today_attendance():
     user = g.current_user
     today_str, current_time_str = get_current_time_data()
-    is_sun = is_sunday(today_str)
+    is_hol, hol_name, hol_reason = get_holiday_info(today_str)
     record = database.attendance_col.find_one({"employee_id": user["employee_id"], "date": today_str})
     if record:
         record["id"] = str(record.pop("_id"))
     return jsonify({
         "success": True,
         "attendance": record,
-        "is_sunday": is_sun,
-        "is_holiday": is_sun,
-        "holiday_name": "Sunday (Weekly Off)" if is_sun else None,
+        "is_sunday": is_sunday(today_str),
+        "is_holiday": is_hol,
+        "holiday_name": hol_name,
+        "holiday_reason": hol_reason,
         "date": today_str,
         "current_time": current_time_str
     }), 200
